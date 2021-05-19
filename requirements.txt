@@ -1,0 +1,4 @@
+httplib2shim
+gcloud
+google-api-python-client
+pymysql
