@@ -23,6 +23,7 @@ import time
 import traceback
 from flask import jsonify
 from googleapiclient.discovery import build
+from glom import glom
 import googleapiclient.channel
 from googleapiclient.errors import HttpError
 
@@ -78,15 +79,20 @@ def map_youtube_channel_response(youtubeResponse, channelId):
     if youtubeResponse['items'] and len(youtubeResponse['items']) > 0:
         detailResponse = youtubeResponse['items'][0]
         response.update({
-            "title": detailResponse['snippet']['title'],
-            "description": detailResponse['snippet']['description'],
-            "country": detailResponse['snippet']['country'],
-            "views": detailResponse['statistics']['viewCount'],
-            "videoCount": detailResponse['statistics']['videoCount'],
-            "subscribers": detailResponse['statistics']['subscriberCount'],
-            "madeForKids": detailResponse['status']['madeForKids'],
+            "title": extract(detailResponse, "snippet.title"),
+            "description": extract(detailResponse, "snippet.description"),
+            "language": extract(detailResponse, "snippet.defaultLanguage"),
+            "country": extract(detailResponse, 'snippet.country'),
+            "thumbnail": extract(detailResponse, 'snippet.thumbnails.default.url'),
+            "views": extract(detailResponse, 'statistics.viewCount'),
+            "videoCount": extract(detailResponse, 'statistics.videoCount'),
+            "subscribers": extract(detailResponse, 'statistics.subscriberCount'),
+            "madeForKids": extract(detailResponse, 'status.madeForKids'),
         })
     return response
+
+def extract(dict, path):
+    return glom(dict, path, default=None)
 
 # Call the API's channels.list method to retrieve an existing channel localization.
 # If the localized text is not available in the requested language,
