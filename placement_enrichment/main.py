@@ -12,21 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from flask import Response
-from os import getenv
-from pymysql.err import OperationalError
 import logging
 import os
-import runtimeconfig
 import sys
-import time
 import traceback
-from flask import jsonify
-from googleapiclient.discovery import build
-from glom import glom
-import googleapiclient.channel
-from googleapiclient.errors import HttpError
+from os import getenv
 
+from flask import Response
+from flask import jsonify
+from glom import glom
+from googleapiclient.discovery import build
+
+import runtimeconfig
 
 # load runtime config into environment variables
 # TODO: do they really need to be in environment variables
@@ -41,38 +38,41 @@ YOUTUBE_AUTH_KEY = getenv('YOUTUBE_AUTH_KEY', 'The Youtube Auth Key')
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
 logger.setLevel(logging.DEBUG)
 
+
 def entrypoint(request):
-    try :
+    try:
         if request.method == 'OPTIONS':
             return __configure_cors(request)
-        elif request.method == 'POST' :
+        elif request.method == 'POST':
             logger.debug(" POST request: {}".format(repr(request)))
             response = __configure_cors(
                 request,
                 lambda request: post_enrich_channels(request.get_json())
-            )          
+            )
         else:
             raise NotImplementedError("Method {} not supported".format(request.method))
 
-        return response 
+        return response
     except:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
         # return error status
         return Response('{"message":"error"}', status=500, mimetype='application/json')
 
+
 def post_enrich_channels(request):
-        # get channel list
-        # batch_name = request_context.get('batchName')
-        # batch_source_type = request_context.get('sourceType')
-        youtubeClient = get_authenticated_youtube_service()
+    # get channel list
+    # batch_name = request_context.get('batchName')
+    # batch_source_type = request_context.get('sourceType')
+    youtubeClient = get_authenticated_youtube_service()
 
-        result = []
-        for channelId in request:
-            response = get_channel_info(youtubeClient, channelId)
-            result.append(map_youtube_channel_response(response, channelId))
+    result = []
+    for channelId in request:
+        response = get_channel_info(youtubeClient, channelId)
+        result.append(map_youtube_channel_response(response, channelId))
 
-        return jsonify(result)
+    return jsonify(result)
+
 
 def map_youtube_channel_response(youtubeResponse, channelId):
     response = {"channelId": channelId}
@@ -91,8 +91,10 @@ def map_youtube_channel_response(youtubeResponse, channelId):
         })
     return response
 
+
 def extract(dict, path):
     return glom(dict, path, default=None)
+
 
 # Call the API's channels.list method to retrieve an existing channel localization.
 # If the localized text is not available in the requested language,
@@ -112,9 +114,11 @@ def get_channel_info(youtube, channel_id):
 
     return results
 
+
 # Authorize the request and store authorization credentials.
 def get_authenticated_youtube_service():
-  return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=YOUTUBE_AUTH_KEY)
+    return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=YOUTUBE_AUTH_KEY)
+
 
 def __configure_cors(request, controller=(lambda _: "")):
     # For more information about CORS and CORS preflight requests, see
