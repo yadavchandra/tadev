@@ -18,12 +18,14 @@ import sys
 import traceback
 from os import getenv
 
-from flask import Response
-from flask import jsonify
+from flask import Response, jsonify, Flask, make_response
 from glom import glom
 from googleapiclient.discovery import build
 
 import runtimeconfig
+
+app = Flask(__name__)
+app.config['JSON_SORT_KEYS'] = False
 
 # load runtime config into environment variables
 # TODO: do they really need to be in environment variables
@@ -68,8 +70,8 @@ def post_enrich_channels(request):
 
     result = []
     for channelId in request:
-        response = get_channel_info(youtubeClient, channelId)
-        result.append(map_youtube_channel_response(response, channelId))
+        channelResponse = get_channel_info(youtubeClient, channelId)
+        result.append(map_youtube_channel_response(channelResponse, channelId))
 
     return jsonify(result)
 
@@ -89,12 +91,11 @@ def map_youtube_channel_response(youtubeResponse, channelId):
             "subscribers": extract(detailResponse, 'statistics.subscriberCount'),
             "madeForKids": extract(detailResponse, 'status.madeForKids'),
         })
-    return response
+    return clean_nones(response)
 
 
 def extract(dict, path):
     return glom(dict, path, default=None)
-
 
 # Call the API's channels.list method to retrieve an existing channel localization.
 # If the localized text is not available in the requested language,
@@ -113,6 +114,22 @@ def get_channel_info(youtube, channel_id):
     ).execute()
 
     return results
+
+def clean_nones(value):
+    """
+    Recursively remove all None values from dictionaries and lists, and returns
+    the result as a new dictionary or list.
+    """
+    if isinstance(value, list):
+        return [clean_nones(x) for x in value if x is not None]
+    elif isinstance(value, dict):
+        return {
+            key: clean_nones(val)
+            for key, val in value.items()
+            if val is not None
+        }
+    else:
+        return value
 
 
 # Authorize the request and store authorization credentials.
