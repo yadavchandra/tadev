@@ -17,15 +17,13 @@ import os
 import sys
 import traceback
 from os import getenv
+import multiprocessing as mp
 
 from flask import Response, jsonify, Flask, make_response
 from glom import glom
 from googleapiclient.discovery import build
 
 import runtimeconfig
-
-app = Flask(__name__)
-app.config['JSON_SORT_KEYS'] = False
 
 # load runtime config into environment variables
 # TODO: do they really need to be in environment variables
@@ -40,6 +38,8 @@ YOUTUBE_AUTH_KEY = getenv('YOUTUBE_AUTH_KEY', 'The Youtube Auth Key')
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
 logger.setLevel(logging.DEBUG)
 
+# Youtube client in global scope to be re-used
+youtubeClient = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=YOUTUBE_AUTH_KEY)
 
 def entrypoint(request):
     try:
@@ -66,7 +66,6 @@ def post_enrich_channels(request):
     # get channel list
     # batch_name = request_context.get('batchName')
     # batch_source_type = request_context.get('sourceType')
-    youtubeClient = get_authenticated_youtube_service()
 
     result = []
     for channelId in request:
@@ -78,20 +77,26 @@ def post_enrich_channels(request):
 
 def map_youtube_channel_response(youtubeResponse, channelId):
     response = {"channelId": channelId}
-    if youtubeResponse['items'] and len(youtubeResponse['items']) > 0:
+    if 'items' in youtubeResponse and len(youtubeResponse['items']) > 0:
         detailResponse = youtubeResponse['items'][0]
         response.update({
-            "title": extract(detailResponse, "snippet.title"),
+            "name": extract(detailResponse, "snippet.title"),
             "description": extract(detailResponse, "snippet.description"),
             "language": extract(detailResponse, "snippet.defaultLanguage"),
             "country": extract(detailResponse, 'snippet.country'),
             "thumbnail": extract(detailResponse, 'snippet.thumbnails.default.url'),
-            "views": extract(detailResponse, 'statistics.viewCount'),
-            "videoCount": extract(detailResponse, 'statistics.videoCount'),
-            "subscribers": extract(detailResponse, 'statistics.subscriberCount'),
+            "views": cast_to_integer(extract(detailResponse, 'statistics.viewCount')),
+            "videoCount": cast_to_integer(extract(detailResponse, 'statistics.videoCount')),
+            "subscribers": cast_to_integer(extract(detailResponse, 'statistics.subscriberCount')),
             "madeForKids": extract(detailResponse, 'status.madeForKids'),
         })
     return clean_nones(response)
+
+def cast_to_integer(string_value):
+    if string_value is None:
+        return string_value
+    elif type(string_value) == str and string_value != "":
+        return int(string_value)
 
 
 def extract(dict, path):
@@ -130,12 +135,6 @@ def clean_nones(value):
         }
     else:
         return value
-
-
-# Authorize the request and store authorization credentials.
-def get_authenticated_youtube_service():
-    return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=YOUTUBE_AUTH_KEY)
-
 
 def __configure_cors(request, controller=(lambda _: "")):
     # For more information about CORS and CORS preflight requests, see

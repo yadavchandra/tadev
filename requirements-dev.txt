@@ -1,1 +1,3 @@
 functions-framework
+urllib3
+retry
