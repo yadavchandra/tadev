@@ -20,8 +20,8 @@ import os
 import pymysql
 import runtimeconfig
 import sys
-import time
 import traceback
+import placement_enrichment
 from flask import jsonify
 
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
