@@ -111,11 +111,17 @@ def put_placement_update(request_context):
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
-            cursor.execute("""UPDATE manualquarationDB.placement_details
+            try:
+                cursor.execute("""UPDATE manualquarationDB.placement_details
                                SET priority = %s
                                WHERE batchID = %s """,(batch_priority, placementID))
-            results = cursor.fetchone()
-
+                results = cursor.fetchone()
+            except:
+                logger.error("Error while updating placement details")
+            finally:
+                logger.info("Closing cursor and mysql_con object")
+                cursor.close
+                mysql_conn.close
         response = Response('{{"message":"success", ' \
                             ' "batch_name":"{}"}}'.format(placementID),
                             status=200, 
@@ -142,15 +148,21 @@ def put_bulk_update(request_context):
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
             
-            if column_to_update == "status":
-                sql_update_query = """Update manualquarationDB.placement_details set status = %s where placementID = %s"""
-            elif column_to_update == 'priority':
-                sql_update_query = """Update manualquarationDB.placement_details set priority = %s where placementID = %s"""
-            elif column_to_update == 'moderator':
-                sql_update_query = """Update manualquarationDB.placement_details set moderator = %s where placementID = %s"""    
+            try:
+                if column_to_update == "status":
+                    sql_update_query = """Update manualquarationDB.placement_details set status = %s where placementID = %s"""
+                elif column_to_update == 'priority':
+                    sql_update_query = """Update manualquarationDB.placement_details set priority = %s where placementID = %s"""
+                elif column_to_update == 'moderator':
+                    sql_update_query = """Update manualquarationDB.placement_details set moderator = %s where placementID = %s"""    
             
-            cursor.executemany(sql_update_query, records_to_update)
-
+                cursor.executemany(sql_update_query, records_to_update)
+            except:
+                logger.error("Error while updating placement details in bulk")
+            finally:
+                logger.info("Closing cursor and mysql_con object")
+                cursor.close
+                mysql_conn.close            
             records_updated = cursor.rowcount
 
         response = Response('{{"message":"Records updated successfully", ' \
@@ -168,10 +180,16 @@ def delete_placement(request_context):
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
             
-            cursor.execute("""DELETE FROM manualquarationDB.placement_details
+            try:
+                cursor.execute("""DELETE FROM manualquarationDB.placement_details
                                WHERE placementID = %s """,(placementID))
-            results = cursor.fetchone()
-
+                results = cursor.fetchone()
+            except:
+                logger.error("Error while deleting placement details")
+            finally:
+                logger.info("Closing cursor and mysql_con object")
+                cursor.close
+                mysql_conn.close
         response = Response('{{"message":"success", ' \
                             ' "placementID":"{}"}}'.format(placementID),
                             status=200, 
@@ -187,9 +205,15 @@ def get_placements():
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
         
-            cursor.execute("""select m.placementID as placementId,d.batchName as source,m.name as name, m.inventoryType as inventoryType,m.url as url,m.language as language,m.originCountry as origin,m.moderator as moderator,m.priority as priority,m.status as status from manualquarationDB.discovery_batch_details d join  manualquarationDB.placement_details m on d.batchID = m.batchID""")
-            results = cursor.fetchall()
-        
+            try:
+                cursor.execute("""select m.placementID as placementId,d.batchName as source,m.name as name, m.inventoryType as inventoryType,m.url as url,m.language as language,m.originCountry as origin,m.moderator as moderator,m.priority as priority,m.status as status from manualquarationDB.discovery_batch_details d join  manualquarationDB.placement_details m on d.batchID = m.batchID""")
+                results = cursor.fetchall()
+            except:
+                logger.error("Error while fetching placement details")
+            finally:
+                logger.info("Closing cursor and mysql_con object")
+                cursor.close
+                mysql_conn.close        
         return jsonify(results)
 
 
