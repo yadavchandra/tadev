@@ -284,4 +284,9 @@ def batch_status(request):
         logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
 
         # return error status
-        return Response('{"message":"error"}', status=500, mimetype='application/json')
+        return Response('{"message":"error"}', status=500, mimetype='application/json', headers={
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Max-Age': '3600'
+        })
