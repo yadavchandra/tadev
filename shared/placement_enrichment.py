@@ -14,12 +14,8 @@
 
 import logging
 import os
-import sys
-import traceback
 from os import getenv
-import multiprocessing as mp
 
-from flask import Response, jsonify, Flask, make_response
 from glom import glom
 from googleapiclient.discovery import build
 
@@ -41,34 +37,57 @@ logger.setLevel(logging.DEBUG)
 # Youtube client in global scope to be re-used
 youtubeClient = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=YOUTUBE_AUTH_KEY)
 
-def enrich_channels(request):
 
+def enrich_channel(channelId):
+    """
+    Enriches a single youtube channels provided as a string. Returns a dict with the enriched data.
+    """
+    channelResponse = __get_channel_info(youtubeClient, channelId)
+    return __map_youtube_channel_response(channelResponse, channelId)
+
+
+def enrich_channels(channelIdList):
+    """
+    Enriches multiple youtube channels provided as a string array. Returns an array of
+    dicts with the enriched data.
+    """
     result = []
-    for channelId in request:
+    for channelId in channelIdList:
         channelResponse = __get_channel_info(youtubeClient, channelId)
         result.append(__map_youtube_channel_response(channelResponse, channelId))
 
-    return jsonify(result)
+    return result
 
-def __map_youtube_channel_response(youtubeResponse, channelId):
-    response = {"channelId": channelId}
-    if 'items' in youtubeResponse and len(youtubeResponse['items']) > 0:
-        detailResponse = youtubeResponse['items'][0]
+
+def __map_youtube_channel_response(youtube_response, channelId):
+    """
+    Youtube channel information returned is mapped to a dict
+    """
+    response = {"id": channelId}
+    if 'items' in youtube_response and len(youtube_response['items']) > 0:
+        detailResponse = youtube_response['items'][0]
+        views = __cast_to_integer(__extract(detailResponse, 'statistics.viewCount'))
+        videoCount = __cast_to_integer(__extract(detailResponse, 'statistics.videoCount'))
         response.update({
             "name": __extract(detailResponse, "snippet.title"),
             "description": __extract(detailResponse, "snippet.description"),
             "language": __extract(detailResponse, "snippet.defaultLanguage"),
-            "country": __extract(detailResponse, 'snippet.country'),
-            "thumbnail": __extract(detailResponse, 'snippet.thumbnails.default.url'),
-            "views": __cast_to_integer(__extract(detailResponse, 'statistics.viewCount')),
-            "videoCount": __cast_to_integer(__extract(detailResponse, 'statistics.videoCount')),
+            "originSourceCountry": __extract(detailResponse, 'snippet.country'),
+            "thumbnail": __extract(detailResponse, 'snippet.thumbnails.high.url'),
+            "views": views,
+            "averageView": views / videoCount,
+            "videos": videoCount,
             "subscribers": __cast_to_integer(__extract(detailResponse, 'statistics.subscriberCount')),
             "mfk": __extract(detailResponse, 'status.madeForKids'),
             "url": f"https://www.youtube.com/channel/{__extract(detailResponse, 'id')}",
         })
     return __clean_nones(response)
 
+
 def __cast_to_integer(string_value):
+    """
+    Casts a string to an integer unless it is None
+    """
     if string_value is None:
         return string_value
     elif type(string_value) == str and string_value != "":
@@ -78,11 +97,11 @@ def __cast_to_integer(string_value):
 def __extract(dict, path):
     return glom(dict, path, default=None)
 
-# Call the API's channels.list method to retrieve an existing channel localization.
-# If the localized text is not available in the requested language,
-# this method will return text in the default language.
-def __get_channel_info(youtube, channel_id):
 
+def __get_channel_info(youtube, channel_id):
+    """
+    Returns information for the given channel through the Youtube API
+    """
     results = youtube.channels().list(
         part='snippet,'
              'contentDetails,'
@@ -96,6 +115,7 @@ def __get_channel_info(youtube, channel_id):
     ).execute()
 
     return results
+
 
 def __clean_nones(value):
     """

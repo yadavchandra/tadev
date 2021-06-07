@@ -21,7 +21,6 @@ import pymysql
 import runtimeconfig
 import sys
 import traceback
-import placement_enrichment
 from flask import jsonify
 
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
@@ -58,6 +57,10 @@ def __get_mysql_conn():
 
     if not mysql_conn:
         try:
+            if(getenv('ENVIRONMENT') == 'local'):
+                mysql_config.update({
+                    'host': getenv('DB_HOST')
+                })
             mysql_conn = pymysql.connect(**mysql_config)
         except OperationalError:
             logger.warning("Connection without unix_socket failed, trying sockct connect")
