@@ -22,7 +22,6 @@ import os
 import pymysql
 import runtimeconfig
 import sys
-import time
 import traceback
 import constants as cons
 from custom_error import InvalidRequestException
@@ -61,6 +60,10 @@ def __get_mysql_conn():
 
     if not mysql_conn:
         try:
+            if(getenv('ENVIRONMENT') == 'local'):
+                mysql_config.update({
+                    'host': getenv('DB_HOST')
+                })
             mysql_conn = pymysql.connect(**mysql_config)
         except OperationalError:
             logger.warning("Connection without unix_socket failed, trying sockct connect")
@@ -311,9 +314,8 @@ def placement_details(request):
         exc_type, exc_value, exc_traceback = sys.exc_info()
         
         logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
-
         # return error status
-        return Response('{"message":"error"}', status=500, mimetype='application/json', headers = {
+        return Response('{"message":"error"}', status=500, mimetype='application/json', headers={
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': '*',
             'Access-Control-Allow-Headers': 'Content-Type',

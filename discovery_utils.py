@@ -23,10 +23,14 @@ import runtimeconfig
 import sys
 import time
 import traceback
+from glom import glom
 from flask import jsonify
 import python_utils as util
 import constants as cons
 from custom_error import InvalidRequestException
+
+from shared.placement_enrichment import enrich_channel
+from shared.cors_configuration import configure_cors
 
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
 logger.setLevel(logging.DEBUG)
@@ -51,7 +55,7 @@ mysql_config = {
   'cursorclass': pymysql.cursors.DictCursor,
   'autocommit': True
 }
- 
+
 
 # Create SQL connection globally to enable reuse
 # PyMySQL does not include support for connection pooling
@@ -64,13 +68,20 @@ def __get_mysql_conn():
 
     if not mysql_conn:
         try:
+            # For local testing, the DB_HOST environment var can be provided
+            # to connect to a local or remote database
+            if getenv('ENVIRONMENT') == 'local':
+                mysql_config.update({
+                    'host': getenv('DB_HOST'),
+                    'port': 3306
+                })
             mysql_conn = pymysql.connect(**mysql_config)
         except OperationalError:
             logger.warning("Connection without unix_socket failed, trying sockct connect")
             # If production settings fail, use local development ones
             mysql_config['unix_socket'] = f'/cloudsql/{CONNECTION_NAME}'
             mysql_conn = pymysql.connect(**mysql_config)
-    
+
 def __get_cursor():
     """
     Helper function to get a cursor
@@ -83,37 +94,13 @@ def __get_cursor():
         mysql_conn.ping(reconnect=True)
         return mysql_conn.cursor()
 
-def __configure_cors(request, controller=(lambda _: "")):
-    # For more information about CORS and CORS preflight requests, see
-    # https://developer.mozilla.org/en-US/docs/Glossary/Preflight_request
-    # for more information.
-
-    # Set CORS headers for the preflight request
-    if request.method == 'OPTIONS':
-        # Allows GET requests from any origin with the Content-Type
-        # header and caches preflight response for an 3600s
-        headers = {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Max-Age': '3600'
-        }
-
-        return ('', 204, headers)
-
-    # Set CORS headers for the main request
-    headers = {
-        'Access-Control-Allow-Origin': '*'
-    }
-
-    return (controller(request), 200, headers)   
 
 @app.errorhandler(InvalidRequestException)
 def handle_resource_not_found(e):
     return jsonify(e.to_dict())
 # Method to upload batch data
 def upload_batch_data(request_context):
-        # obtain the widget identifier to create 
+        # obtain the widget identifier to create
         batch_name = request_context.get('batchName')
         batch_source_type = request_context.get('sourceType')
         #batch_prio = request_context.get('batch_prio','1')
@@ -140,7 +127,7 @@ def upload_batch_data(request_context):
             totalPlacements = len(placementList)
             cursor.execute("""SELECT countryCode,countryID from manualquarationDB.country_info_details""")
             countryDetails = cursor.fetchall()
-    
+
             try:
                 cursor.execute("""INSERT INTO manualquarationDB.discovery_batch_details (batchName , sourceType ,  priority ,
                 totalPlacements , newPlacements , duplicatePlacements )
@@ -150,17 +137,32 @@ def upload_batch_data(request_context):
                 batchID = cursor.lastrowid
                 try:
                     for item in newPlacements:
-                        item.pop('row')
+                        item.pop('row', None)
                         item['batchID'] = batchID
                         item['priority'] = priority
                         item['inventoryType'] = inventory_type[item['inventoryType'].casefold()]
                         item['originCountry'] = getCountryId(countryDetails,item['originCountry'])
+
                         cols = ", ".join('`{}`'.format(k) for k in item.keys())
                         val_cols = ', '.join('%({})s'.format(k) for k in item.keys())
                         sql = "INSERT INTO manualquarationDB.placement_details(%s) VALUES(%s)"
                         res_sql = sql % (cols, val_cols)
                         cursor.execute (res_sql, item)
-                        # Insert data into dupes details table
+
+                        enrichedChannels = enrich_channel(item['id'])
+                        mergedChannels = {**item, **enrichedChannels}
+
+                        if 'originSourceCountry' in mergedChannels:
+                            mergedChannels['originSourceCountry'] = getCountryId(countryDetails, mergedChannels['originSourceCountry'])
+
+                        cols = ", ".join('`{}`'.format(k) for k in mergedChannels.keys())
+                        val_cols = ', '.join('%({})s'.format(k) for k in mergedChannels.keys())
+                        sql = "insert into manualquarationDB.placement_details(%s) values(%s)"
+                        res_sql = sql % (cols, val_cols)
+                        cursor.execute (res_sql, mergedChannels)
+                        # cursor.execute(""" INSERT INTO manualquarationDB.placement_details(batchID,priority,name , id , url , inventoryType, language, originCountry)
+                        #                 VALUES(%s, %s, %s, %s, %s, %s, %s, %s) """,(batchID, priority, item['name'], item['id'], item['url'] , inventoryId , item['language'],originCountry))
+                    # Insert data into dupes details table
                     util.insertInToBatchDupesDetails(batchID,cursor,duplicatePlacementIds,newPlacementIds)
                 except:
                     logger.error("Error while inserting records in placement details info")
@@ -177,7 +179,7 @@ def upload_batch_data(request_context):
                 mysql_conn.close
         response = Response('{{"message":"success", ' \
                             ' "batch_uid":"{}"}}'.format(batch_name),
-                            status=200, 
+                            status=200,
                             mimetype='application/json')
 
         return response
@@ -219,13 +221,13 @@ def update_batch_priority(request_context):
 
         response = Response('{{"message":"success", ' \
                             ' "batchID":"{}"}}'.format(batchID),
-                            status=200, 
+                            status=200,
                             mimetype='application/json')
 
         return response
 
-# Method to delete entry from batch_discovery_view table 
-#That can be  extended further for batch delete
+""" Method to delete entry from batch_discovery_view table
+ That can be  extended further for batch delete """
 def delete_batch_priority(request_context):
         # obtain the bachName to delete
         batchID = request_context.args.get('batchID')
@@ -267,7 +269,7 @@ def get_batch_details(request_context):
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
-        
+
             try:
                 cursor.execute("""SELECT count(*) as total FROM manualquarationDB.discovery_batch_details """)
                 count = cursor.fetchone()
@@ -313,7 +315,7 @@ def get_batch_details(request_context):
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
-                mysql_conn.close       
+                mysql_conn.close
         return jsonify(results)
 
 
@@ -323,39 +325,44 @@ def batch_status(request):
         # Initialize connections lazily, in case SQL access isn't needed for this
         # GCF instance. Doing so minimizes the number of active SQL connections,
         # which helps keep your GCF instances under SQL connection limits.
-        __get_mysql_conn() 
+        __get_mysql_conn()
 
         if request.method == 'OPTIONS':
-            return __configure_cors(request)
+            return configure_cors(request)
         elif request.method == 'GET' :
             logger.debug(" GET request: {}".format(repr(request)))
-            response = __configure_cors(
+            response = configure_cors(
                 request,
+                200,
                 lambda request: get_batch_details(request)
+                
             )
             #request_context = request.args
-            #response = get_batch_status(request) 
+            #response = get_batch_status(request)
         elif request.method == 'POST' :
             logger.debug(" POST request: {}".format(repr(request)))
             #request_context = request.get_json()
             #response = post_batch_status(request_context)
-            response = __configure_cors(
+            response = configure_cors(
                 request,
+                200,
                 lambda request: upload_batch_data(request.get_json())
-            ) 
+            )
         elif request.method == 'PUT' :
             logger.debug(" PUT request: {}".format(repr(request)))
             #request_context = request.get_json()
-            response = __configure_cors(
+            response = configure_cors(
                 request,
+                200,
                 lambda request: update_batch_priority(request.get_json())
-            ) 
+            )
         elif request.method == 'DELETE' :
             logger.debug(" DELETE request: {}".format(repr(request)))
             #request_context = request.get_json()
             #response = delete_batch_status(request_context)
-            response = __configure_cors(
+            response = configure_cors(
                 request,
+                200,
                 lambda request: delete_batch_priority(request)
             )             
         else :
@@ -375,14 +382,11 @@ def batch_status(request):
         })
     except :
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        
-        logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
 
-        # return error status
-        return Response('{"message":"error"}', status=500, mimetype='application/json', headers = {
+        logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+        return Response('{"message":"error"}', status=500, mimetype='application/json', headers={
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': '*',
             'Access-Control-Allow-Headers': 'Content-Type',
             'Access-Control-Max-Age': '3600'
         })
-
