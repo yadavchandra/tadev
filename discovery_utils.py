@@ -236,7 +236,7 @@ def batch_status(request):
         __get_mysql_conn()
 
         if request.method == 'OPTIONS':
-            return __configure_cors(request)
+            return configure_cors(request)
         elif request.method == 'GET' :
             logger.debug(" GET request: {}".format(repr(request)))
             response = configure_cors(
