@@ -22,6 +22,7 @@ import runtimeconfig
 import sys
 import time
 import traceback
+from glom import glom
 from flask import jsonify
 from shared.placement_enrichment import enrich_channel
 from shared.cors_configuration import configure_cors
@@ -117,9 +118,10 @@ def upload_batch_data(request_context):
                         item['originCountry'] = getCountryId(countryDetails,item['originCountry'])
                         enrichedChannels = enrich_channel(item['id'])
                         mergedChannels = {**item, **enrichedChannels}
-                        mergedChannels['originSourceCountry'] = getCountryId(countryDetails, mergedChannels['originSourceCountry'])
 
-                        # populate_placements_record(mergedChannels)
+                        if 'originSourceCountry' in mergedChannels:
+                            mergedChannels['originSourceCountry'] = getCountryId(countryDetails, mergedChannels['originSourceCountry'])
+
                         cols = ", ".join('`{}`'.format(k) for k in mergedChannels.keys())
                         val_cols = ', '.join('%({})s'.format(k) for k in mergedChannels.keys())
                         sql = "insert into manualquarationDB.placement_details(%s) values(%s)"
