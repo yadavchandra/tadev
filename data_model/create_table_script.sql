@@ -52,6 +52,9 @@ percentageAssigned INT,
 percentageModerated INT,
 percentageQc INT,
 priority INT,
+totalPlacements INT default 0,
+newPlacements INT default 0,
+duplicatePlacements INT default 0,
 PRIMARY KEY(batchID)
 --KEY `batchID` (`batchID`,`priority`)
 );
@@ -80,6 +83,8 @@ name VARCHAR(150),
 id VARCHAR(100),
 url VARCHAR(150),
 inventoryType INT,
+inventoryStatus INT,
+reasonForRejection INT;
 sourceType INT,
 source_name VARCHAR(25),
 thumbnail VARCHAR(200),
@@ -137,4 +142,14 @@ CREATE TABLE IF NOT EXISTS manualquarationDB.sourceType_info_details(
 souceTypeID INT NOT NULL AUTO_INCREMENT,
 souceType VARCHAR(30),
 PRIMARY KEY(souceTypeID)
+);
+
+-- Table: batch_dupes_details
+
+CREATE TABLE IF NOT EXISTS manualquarationDB.batch_dupes_details(
+dupesID INT NOT NULL AUTO_INCREMENT,
+batchID INT NOT NULL,id VARCHAR(100), status ENUM('new','dupes') NOT NULL,
+dateUploaded TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+PRIMARY KEY(dupesID),
+FOREIGN KEY (batchID) REFERENCES manualquarationDB.discovery_batch_details(batchID)
 );

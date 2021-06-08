@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from flask import Response
+import flask
+app = flask.Flask(__name__)
+from flask import Response, jsonify
 from os import getenv
 from pymysql.err import OperationalError
 import logging
@@ -22,7 +24,8 @@ import runtimeconfig
 import sys
 import time
 import traceback
-from flask import jsonify
+import constants as cons
+from custom_error import InvalidRequestException
 
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
 logger.setLevel(logging.DEBUG)
@@ -78,6 +81,7 @@ def __get_cursor():
         mysql_conn.ping(reconnect=True)
         return mysql_conn.cursor()
 
+
 def __configure_cors(request, controller=(lambda _: "")):
     # For more information about CORS and CORS preflight requests, see
     # https://developer.mozilla.org/en-US/docs/Glossary/Preflight_request
@@ -103,6 +107,10 @@ def __configure_cors(request, controller=(lambda _: "")):
 
     return (controller(request), 200, headers)
 
+@app.errorhandler(InvalidRequestException)
+def handle_resource_not_found(e):
+    return jsonify(e.to_dict())
+
 def put_placement_update(request_context):
         # obtain the widget status code to update
         placementID = request_context.get('placementID')
@@ -118,6 +126,7 @@ def put_placement_update(request_context):
                 results = cursor.fetchone()
             except:
                 logger.error("Error while updating placement details")
+                raise InvalidRequestException('DB error while updating priority.Please check') 
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
@@ -141,24 +150,23 @@ def put_bulk_update(request_context):
             records_to_update.append(tuple)
         # Convert data to tuple for bulk update
         #records_to_update = [(key,)+tuple(val) for dic in item_list for key,val in dic.items()]
-        print("values_to_update :",records_to_update )
         column_to_update = request_context.get('field')
-        print("column_to_update",column_to_update)
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
             
             try:
                 if column_to_update == "status":
-                    sql_update_query = """Update manualquarationDB.placement_details set status = %s where placementID = %s"""
+                    sql_update_query = """UPDATE manualquarationDB.placement_details SET status = %s WHERE placementID = %s"""
                 elif column_to_update == 'priority':
-                    sql_update_query = """Update manualquarationDB.placement_details set priority = %s where placementID = %s"""
+                    sql_update_query = """UPDATE manualquarationDB.placement_details SET priority = %s WHERE placementID = %s"""
                 elif column_to_update == 'moderator':
-                    sql_update_query = """Update manualquarationDB.placement_details set moderator = %s where placementID = %s"""    
+                    sql_update_query = """UPDATE manualquarationDB.placement_details SET moderator = %s WHERE placementID = %s"""    
             
                 cursor.executemany(sql_update_query, records_to_update)
             except:
                 logger.error("Error while updating placement details in bulk")
+                raise InvalidRequestException('DB error while bulk update.Please check')
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
@@ -175,45 +183,83 @@ def put_bulk_update(request_context):
 #That can be  extended further for batch delete
 def delete_placement(request_context):
         # obtain the bachName to delete
-        placementID = request_context.get('placementID')
+        placementID = request_context.args.get('placementID')
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
+            cursor.execute("""SELECT COUNT(*) as count FROM manualquarationDB.placement_details
+                               WHERE placementID = %s """,(placementID))
+            result = cursor.fetchone()
+            if result['count'] == 0:
+                mysql_conn.close
+                raise InvalidRequestException('No record found to delete for placementID {}'.format(placementID),404)
             
             try:
                 cursor.execute("""DELETE FROM manualquarationDB.placement_details
-                               WHERE placementID = %s """,(placementID))
+                                WHERE placementID = %s """,(placementID))
                 results = cursor.fetchone()
             except:
                 logger.error("Error while deleting placement details")
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
-                mysql_conn.close
-        response = Response('{{"message":"success", ' \
+                mysql_conn.close    
+        response = Response('{{"message":"Deleted successfully", ' \
                             ' "placementID":"{}"}}'.format(placementID),
                             status=200, 
                             mimetype='application/json')
-
         return response
-
+           
+            
 #Moderation Queue list details
-def get_placements():
-        # obtain the widget status code to query
-        results = []
+def get_placements(request_context):
+        # obtain the nextpageToken
+        nextPageToken = request_context.args.get('nextPageToken')
+        batchID = request_context.args.get('batchID')
+        results = {}
+        isFirstCall = True
+        if nextPageToken or batchID:
+            isFirstCall = False
+
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
         
             try:
-                cursor.execute("""select m.placementID as placementId,d.batchName as source,m.name as name, m.inventoryType as inventoryType,m.url as url,m.language as language,m.originCountry as origin,m.moderator as moderator,m.priority as priority,m.status as status from manualquarationDB.discovery_batch_details d join  manualquarationDB.placement_details m on d.batchID = m.batchID""")
-                results = cursor.fetchall()
+                cursor.execute("""SELECT count(*) as total FROM manualquarationDB.placement_details """)
+                count = cursor.fetchone()
+                results['totalPlacements'] = count['total']
+                if isFirstCall:
+                    cursor.execute("""SELECT m.placementID as placementID,d.batchName as source,m.name as name, 
+                    m.inventoryType as inventoryType,m.url as url,m.language as language,m.originCountry as origin,
+                    m.moderator as moderator,m.priority as priority,m.status as status, m.id as sourceID 
+                    FROM manualquarationDB.discovery_batch_details d join  
+                    manualquarationDB.placement_details m on d.batchID = m.batchID order by m.placementID asc limit %s """,(cons.MAX_RECORD_PER_FETCH))
+                    results['placements'] = cursor.fetchall()
+                elif batchID:
+                    cursor.execute("""SELECT m.placementID as placementID,d.batchID as batchID,d.batchName as source,m.name as name, 
+                    m.inventoryType as inventoryType,m.url as url,m.language as language,m.originCountry as origin,
+                    m.moderator as moderator,m.priority as priority,m.status as status, m.id as sourceID
+                    FROM manualquarationDB.discovery_batch_details d join  
+                    manualquarationDB.placement_details m on d.batchID = m.batchID
+                    WHERE m.batchID = %s """,(batchID))
+                    results.pop('totalPlacements')
+                    results = cursor.fetchall()
+                else:
+                    cursor.execute("""SELECT m.placementID AS placementID,d.batchName AS source,m.name AS name, 
+                    m.inventoryType AS inventoryType,m.url AS url,m.language AS language,m.originCountry AS origin,
+                    m.moderator AS moderator,m.priority AS priority,m.status AS status ,m.id AS sourceID
+                    FROM manualquarationDB.discovery_batch_details d JOIN  
+                    manualquarationDB.placement_details m ON d.batchID = m.batchID
+                    WHERE m.placementID > %s LIMIT %s """,(nextPageToken,cons.MAX_RECORD_PER_FETCH))
+                    results['placements'] = cursor.fetchall()
             except:
                 logger.error("Error while fetching placement details")
+                raise InvalidRequestException('DB error while fetching record.Please check')
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
-                mysql_conn.close        
+                mysql_conn.close       
         return jsonify(results)
 
 
@@ -231,37 +277,35 @@ def placement_details(request):
             logger.debug(" GET request: {}".format(repr(request)))
             response = __configure_cors(
                 request,
-                lambda request: get_placements()
-            )
-            #get_placements(request) 
-        # elif request.method == 'POST' :
-        #     logger.debug(" POST request: {}".format(repr(request)))
-        #     request_context = request.get_json()
-        #     response = post_batch_status(request_context) 
-
+                lambda request: get_placements(request)
+            ) 
         elif request.method == 'PUT' :
             logger.debug(" PUT request: {}".format(repr(request)))
             response = __configure_cors(
                 request,
                 lambda request: put_bulk_update(request.get_json())
             )
-            # request_context = request.get_json()
-            # if 'bulkUpdate' in request_context:
-            #     response = put_bulk_update(request_context)
-            # else:
-            #     response = put_placement_update(request_context) 
         elif request.method == 'DELETE' :
             logger.debug(" DELETE request: {}".format(repr(request)))
-            #request_context = request.get_json()
-            #response = delete_placement(request_context) 
             response = __configure_cors(
                 request,
-                lambda request: delete_placement(request.get_json()) 
+                lambda request: delete_placement(request) 
             )
         else :
             raise NotImplementedError("Method {} not supported".format(request.method))
 
         return response
+    except InvalidRequestException as ire:
+        errormessage= ire.message
+        return Response('{{' \
+                            ' "message":"{}"}}'.format(errormessage),
+                             status=404, mimetype='application/json',
+                             headers = {
+                            'Access-Control-Allow-Origin': '*',
+                            'Access-Control-Allow-Methods': '*',
+                            'Access-Control-Allow-Headers': 'Content-Type',
+                            'Access-Control-Max-Age': '3600'
+        })
 
     except :
         exc_type, exc_value, exc_traceback = sys.exc_info()
@@ -269,4 +313,9 @@ def placement_details(request):
         logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
 
         # return error status
-        return Response('{"message":"error"}', status=500, mimetype='application/json')
+        return Response('{"message":"error"}', status=500, mimetype='application/json', headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Max-Age': '3600'
+        })

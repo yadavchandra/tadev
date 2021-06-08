@@ -1,0 +1,11 @@
+URLPREFIX = "https://www.youtube.com/channel/"
+MAX_LENGTH_EXCEEDED = 'Name exceeds max allowed character i.e. 250'
+NAME_REQUIRED= 'Name is required'
+ID_REQUIRED = 'ID is required'
+INVALID_URL='Incorrect URL format'
+URL_ID_MISMATCHED='Id does not matched with url id'
+URL_REQUIRED='URL is required'
+MESSAGE ="Invalid uploaded batch data"
+INVALID_INVENTORY_TYPE = "Provided inventory type not allowed"
+INVENTORY_TYPE_REQUIRED = 'InventoryType is required'
+MAX_RECORD_PER_FETCH = 500

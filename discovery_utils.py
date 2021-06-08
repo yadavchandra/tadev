@@ -11,7 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import flask
+app = flask.Flask(__name__)
 from flask import Response
 from os import getenv
 from pymysql.err import OperationalError
@@ -23,6 +24,9 @@ import sys
 import time
 import traceback
 from flask import jsonify
+import python_utils as util
+import constants as cons
+from custom_error import InvalidRequestException
 
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
 logger.setLevel(logging.DEBUG)
@@ -103,6 +107,10 @@ def __configure_cors(request, controller=(lambda _: "")):
     }
 
     return (controller(request), 200, headers)   
+
+@app.errorhandler(InvalidRequestException)
+def handle_resource_not_found(e):
+    return jsonify(e.to_dict())
 # Method to upload batch data
 def upload_batch_data(request_context):
         # obtain the widget identifier to create 
@@ -111,37 +119,58 @@ def upload_batch_data(request_context):
         #batch_prio = request_context.get('batch_prio','1')
         priority = request_context.get('priority')
         placementList = request_context.get('placementList')
-        inventory_type = {"YouTube": 1,"App":2,"Site":3}
+        inventory_type = {"youtube": 1,"app":2,"site":3}
+        # Validate upload batch details
+        errorList = util.validateData(placementList)
+        if len(errorList) >= 1:
+            #return jsonify(errorList)
+            raise InvalidRequestException(errorList,status_code=404)
+        
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
+            cursor.execute(""" SELECT DISTINCT id FROM  manualquarationDB.placement_details""")
+            idDetails = cursor.fetchall()
+            batchDetails = util.getDuplicatePlacements(placementList,idDetails)
+            duplicateCount = batchDetails['duplicateCount']
+            duplicatePlacementIds = batchDetails['duplicatePlacements']
+            newPlacementIds = batchDetails['newPlacementIds']
+            newPlacements = batchDetails['newPlacements']
+            totalNewPlacements = len(newPlacements)
+            totalPlacements = len(placementList)
             cursor.execute("""SELECT countryCode,countryID from manualquarationDB.country_info_details""")
             countryDetails = cursor.fetchall()
     
             try:
-                cursor.execute("""INSERT INTO manualquarationDB.discovery_batch_details (batchName , sourceType ,  priority )
-                                VALUES(%s, %s, %s) """,(batch_name, batch_source_type, priority))
+                cursor.execute("""INSERT INTO manualquarationDB.discovery_batch_details (batchName , sourceType ,  priority ,
+                totalPlacements , newPlacements , duplicatePlacements )
+                                VALUES(%s, %s, %s, %s, %s, %s) """,(batch_name, batch_source_type, priority, totalPlacements,
+                               totalNewPlacements, duplicateCount ))
                 # Get lastrowid after successfull insert in discovery bacth details
                 batchID = cursor.lastrowid
                 try:
-                    for item in placementList:
+                    for item in newPlacements:
+                        item.pop('row')
                         item['batchID'] = batchID
                         item['priority'] = priority
-                        item['inventoryType'] = inventory_type[item['inventoryType']]
+                        item['inventoryType'] = inventory_type[item['inventoryType'].casefold()]
                         item['originCountry'] = getCountryId(countryDetails,item['originCountry'])
                         cols = ", ".join('`{}`'.format(k) for k in item.keys())
                         val_cols = ', '.join('%({})s'.format(k) for k in item.keys())
-                        sql = "insert into manualquarationDB.placement_details(%s) values(%s)"
+                        sql = "INSERT INTO manualquarationDB.placement_details(%s) VALUES(%s)"
                         res_sql = sql % (cols, val_cols)
                         cursor.execute (res_sql, item)
-                        # cursor.execute(""" INSERT INTO manualquarationDB.placement_details(batchID,priority,name , id , url , inventoryType, language, originCountry) 
-                        #                 VALUES(%s, %s, %s, %s, %s, %s, %s, %s) """,(batchID, priority, item['name'], item['id'], item['url'] , inventoryId , item['language'],originCountry))
+                        # Insert data into dupes details table
+                    util.insertInToBatchDupesDetails(batchID,cursor,duplicatePlacementIds,newPlacementIds)
                 except:
                     logger.error("Error while inserting records in placement details info")
                     logger.info("Deleting last inserted record in discovery batch")
-                    cursor.execute(""" DELETE FROM manualquarationDB.discovery_batch_view_2 where batchID = %s """,(batchID))
+                    cursor.execute(""" DELETE FROM manualquarationDB.discovery_batch_details WHERE batchID = %s """,(batchID))
+                    cursor.execute(""" DELETE FROM manualquarationDB.batch_dupes_details WHERE batchID = %s """,(batchID))
+                    raise InvalidRequestException("DB error while inserting record to placement.",404)
             except:
                 logger.error("Error while inserting records in discovery batch")
+                raise InvalidRequestException("DB error while inserting record to batch.",404)
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
@@ -162,12 +191,19 @@ def getCountryId(countryList,countryCode):
 
 def update_batch_priority(request_context):
         # obtain the widget status code to update
+        if 'batchID' not in request_context or 'priority' not in request_context :
+               raise InvalidRequestException('Inavlid param value.Please check',404)
         batchID = request_context.get('batchID')
         batch_priority = request_context.get('priority')
         print("batch_priority",batch_priority)
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
+            cursor.execute(""" SELECT COUNT(*) as count FROM manualquarationDB.discovery_batch_details WHERE batchID = %s """,(batchID))
+            result= cursor.fetchone()
+            if result['count'] == 0:
+                mysql_conn.close
+                raise InvalidRequestException('No record found to update for batchID {}'.format(batchID),404)
             try:
                 cursor.execute("""UPDATE manualquarationDB.discovery_batch_details
                                SET priority = %s
@@ -175,6 +211,7 @@ def update_batch_priority(request_context):
                 results = cursor.fetchone()
             except:
                 logger.error("Error while updating batch priority")
+                raise InvalidRequestException('DB error while updating record.')
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
@@ -191,41 +228,88 @@ def update_batch_priority(request_context):
 #That can be  extended further for batch delete
 def delete_batch_priority(request_context):
         # obtain the bachName to delete
-        batchID = request_context.get('batchID')
+        batchID = request_context.args.get('batchID')
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
+            cursor.execute("""SELECT COUNT(*) as count FROM manualquarationDB.discovery_batch_details
+                               WHERE batchID = %s """,(batchID))
+            result = cursor.fetchone()
+            if result['count'] == 0:
+                raise InvalidRequestException('No record found to delete for batchID {}'.format(batchID),404)
             try:
+                #Check if batchID exist to delete
                 cursor.execute("""DELETE FROM manualquarationDB.discovery_batch_details
                                WHERE batchID = %s """,(batchID))
-                results = cursor.fetchone()
+                results = cursor.fetchone()           
             except:
                 logger.error("Error while deleting batch details")
+                raise InvalidRequestException('DB error',404)
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
                 mysql_conn.close
         response = Response('{{"message":"success", ' \
-                            ' "batchID":"{}"}}'.format(batchID),
-                            status=200, 
-                            mimetype='application/json')
+                                        ' "batchID":"{}"}}'.format(batchID),
+                                        status=200, 
+                                        mimetype='application/json')
+        return response                            
+    
 
-        return response
-
-def get_batch_details():
-        # obtain the widget status code to query
-        #widget_status_code = request_context.get('widget_status_code')
-        #json_data=[]
-        results = []
+def get_batch_details(request_context):
+        # obtain the nextpageToken
+        nextPageToken = request_context.args.get('nextPageToken')
+        isFirstCall = True
+        if nextPageToken:
+            isFirstCall = False
+        
+        results = {}
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
         
             try:
-                cursor.execute("""SELECT batchID, sourceType, batchName, dateUploaded,priority from manualquarationDB.discovery_batch_details""")
-                results = cursor.fetchall()
+                cursor.execute("""SELECT count(*) as total FROM manualquarationDB.discovery_batch_details """)
+                count = cursor.fetchone()
+                results['totalBatches'] = count['total']
+                if isFirstCall:
+                    sql_query = """SELECT dbd.batchID,dbd.batchName,dbd.sourceType,dbd.dateUploaded,
+                                    dbd.totalPlacements  AS placements,
+                                    dbd.newPlacements  AS new,
+                                    dbd.duplicatePlacements  AS duplicate,
+                                    FLOOR(AVG(pd.priority)) AS priority,
+                                    CAST(ROUND(SUM(IF(STRCMP(pd.status ,"QC Done") = 0, 1, 0))/COUNT(pd.status),2) AS CHAR)  AS qc,
+                                    CAST(ROUND(SUM(IF(STRCMP(pd.status ,"assigned") = 0, 1, 0))/COUNT(pd.status),2) AS CHAR)  AS assigned,
+                                    CAST(ROUND(SUM(IF(STRCMP(pd.status ,"moderated") = 0, 1, 0))/COUNT(pd.status),2) AS CHAR)  AS moderated,
+                                    CAST(SUM(IF(STRCMP(pd.status ,"approved") = 0, 1, 0)) AS CHAR) AS approved,
+                                    CAST(SUM(IF(STRCMP(pd.status ,"rejected") = 0, 1, 0)) AS CHAR)AS rejected
+                                    FROM manualquarationDB.discovery_batch_details dbd
+                                    INNER JOIN manualquarationDB.placement_details pd ON dbd.batchID = pd.batchID
+                                    GROUP BY pd.batchID ORDER BY dbd.batchID ASC LIMIT %s"""
+                
+                    cursor.execute(sql_query,(cons.MAX_RECORD_PER_FETCH))
+            
+                else:
+                    sql_query ="""SELECT dbd.batchID,dbd.batchName,dbd.sourceType,dbd.dateUploaded,
+                                    dbd.totalPlacements  AS placements,
+                                    dbd.newPlacements  AS new,
+                                    dbd.duplicatePlacements  AS duplicate,
+                                    FLOOR(AVG(pd.priority)) AS priority,
+                                    CAST(ROUND(SUM(IF(STRCMP(pd.status ,"QC Done") = 0, 1, 0))/COUNT(pd.status),2) AS CHAR)  AS qc,
+                                    CAST(ROUND(SUM(IF(STRCMP(pd.status ,"assigned") = 0, 1, 0))/COUNT(pd.status),2) AS CHAR)  AS assigned,
+                                    CAST(ROUND(SUM(IF(STRCMP(pd.status ,"moderated") = 0, 1, 0))/COUNT(pd.status),2) AS CHAR)  AS moderated,
+                                    CAST(SUM(IF(STRCMP(pd.status ,"approved") = 0, 1, 0)) AS CHAR) AS approved,
+                                    CAST(SUM(IF(STRCMP(pd.status ,"rejected") = 0, 1, 0)) AS CHAR)AS rejected
+                                    FROM manualquarationDB.discovery_batch_details dbd
+                                    INNER JOIN manualquarationDB.placement_details pd ON dbd.batchID = pd.batchID
+                                    WHERE dbd.batchID > %s
+                                    GROUP BY pd.batchID ORDER BY dbd.batchID ASC LIMIT %s """
+                    cursor.execute(sql_query,(nextPageToken,cons.MAX_RECORD_PER_FETCH))
+                
+                results['batches'] = cursor.fetchall()
             except:
                 logger.error("Error while getting batch records")
+                raise InvalidRequestException('DB error',404)
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
@@ -247,7 +331,7 @@ def batch_status(request):
             logger.debug(" GET request: {}".format(repr(request)))
             response = __configure_cors(
                 request,
-                lambda request: get_batch_details()
+                lambda request: get_batch_details(request)
             )
             #request_context = request.args
             #response = get_batch_status(request) 
@@ -272,16 +356,33 @@ def batch_status(request):
             #response = delete_batch_status(request_context)
             response = __configure_cors(
                 request,
-                lambda request: delete_batch_priority(request.get_json())
+                lambda request: delete_batch_priority(request)
             )             
         else :
             raise NotImplementedError("Method {} not supported".format(request.method))
 
         return response 
+    except InvalidRequestException as ire:
+        errormessage= ire.message
+        return Response('{{' \
+                            ' "message":"{}"}}'.format(errormessage),
+                             status=404, mimetype='application/json',
+                             headers = {
+                            'Access-Control-Allow-Origin': '*',
+                            'Access-Control-Allow-Methods': '*',
+                            'Access-Control-Allow-Headers': 'Content-Type',
+                            'Access-Control-Max-Age': '3600'
+        })
     except :
         exc_type, exc_value, exc_traceback = sys.exc_info()
         
         logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
 
         # return error status
-        return Response('{"message":"error"}', status=500, mimetype='application/json')
+        return Response('{"message":"error"}', status=500, mimetype='application/json', headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Max-Age': '3600'
+        })
+

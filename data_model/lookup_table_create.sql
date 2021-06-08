@@ -88,6 +88,31 @@ candidateComment VARCHAR(150),
 PRIMARY KEY(candidateStatusID)
 );
 
+-- TABLE: reason details
+CREATE TABLE IF NOT EXISTS manualquarationDB.reason_details(
+reasonID INT NOT NULL AUTO_INCREMENT,
+reasonType VARCHAR(20),
+reasonDetail VARCHAR(20),
+PRIMARY KEY(reasonID)
+);
+
+-- TABLE: Gender Foucs
+
+CREATE TABLE IF NOT EXISTS manualquarationDB.gender_focus_info(
+genderFocusID INT NOT NULL AUTO_INCREMENT,
+gender VARCHAR(20) UNIQUE,
+PRIMARY KEY (genderFocusID)
+);
+
+-- TABLE: Gender
+
+CREATE TABLE IF NOT EXISTS manualquarationDB.gender_info(
+genderID INT NOT NULL AUTO_INCREMENT,
+gender VARCHAR(20) UNIQUE,
+PRIMARY KEY (genderID)
+);
+
+
 
 
 
