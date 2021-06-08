@@ -236,7 +236,7 @@ def batch_status(request):
         __get_mysql_conn()
 
         if request.method == 'OPTIONS':
-            return __configure_cors(request)
+            return configure_cors(request)
         elif request.method == 'GET' :
             logger.debug(" GET request: {}".format(repr(request)))
             response = configure_cors(
@@ -256,13 +256,13 @@ def batch_status(request):
                 lambda request: upload_batch_data(request.get_json())
             )
         elif request.method == 'PUT' :
-            logger.debug(" PUT request: {}".format(repr(request)))
-            #request_context = request.get_json()
-            response = configure_cors(
-                request,
-                200,
-                lambda request: update_batch_priority(request.get_json())
-            )
+                logger.debug(" PUT request: {}".format(repr(request)))
+                #request_context = request.get_json()
+                response = configure_cors(
+                    request,
+                    200,
+                    lambda request: update_batch_priority(request.get_json())
+                )
         elif request.method == 'DELETE' :
             logger.debug(" DELETE request: {}".format(repr(request)))
             #request_context = request.get_json()

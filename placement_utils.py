@@ -22,6 +22,7 @@ import runtimeconfig
 import sys
 import traceback
 from flask import jsonify
+import json
 
 logger = logging.getLogger(os.getenv('FUNCTION_NAME'))
 logger.setLevel(logging.DEBUG)
@@ -46,7 +47,7 @@ mysql_config = {
   'cursorclass': pymysql.cursors.DictCursor,
   'autocommit': True
 }
- 
+
 
 # Create SQL connection globally to enable reuse
 # PyMySQL does not include support for connection pooling
@@ -67,7 +68,7 @@ def __get_mysql_conn():
             # If production settings fail, use local development ones
             mysql_config['unix_socket'] = f'/cloudsql/{CONNECTION_NAME}'
             mysql_conn = pymysql.connect(**mysql_config)
-    
+
 
 def __get_cursor():
     """
@@ -119,18 +120,75 @@ def put_placement_update(request_context):
                                SET priority = %s
                                WHERE batchID = %s """,(batch_priority, placementID))
                 results = cursor.fetchone()
-            except:
-                logger.error("Error while updating placement details")
+            except Exception as e:
+                logger.error("Error while updating placement details" + str(e))
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
                 mysql_conn.close
         response = Response('{{"message":"success", ' \
                             ' "batch_name":"{}"}}'.format(placementID),
-                            status=200, 
+                            status=200,
                             mimetype='application/json')
 
         return response
+
+
+def put_update_placement_details(request_context, placement_id):
+    with __get_cursor() as cursor:
+        try:
+            # Check if record exists
+            cursor.execute(
+                """select placementID from manualquarationDB.placement_details WHERE placementID = %s""",
+                (placement_id)
+            )
+            placement_record = cursor.fetchone()
+
+            if not placement_record:
+                return Response(status=404)
+
+            insert_placement_update(cursor, request_context, placement_id)
+        except Exception as e:
+            logger.error("Error while updating placement details " + str(e))
+        finally:
+            logger.info("Closing cursor and mysql_con object")
+            cursor.close
+            mysql_conn.close
+    return Response(status=200, mimetype='application/json')
+
+
+def insert_placement_update(cursor, request, placement_id):
+    inventory_status = request.get('inventoryStatus')
+    reason_for_rejection = request.get('reasonForRejection')
+    age_groups = request.get('ageGroups')
+    gender = request.get('gender')
+    age_focus = request.get('ageFocus')
+    gender_focus = request.get('genderFocus')
+    categories = request.get('categories')
+    interests = request.get('interests')
+    languages = request.get('languages')
+    origin_country = request.get('originCountry')
+    markets = request.get('marketCountry')
+    comments = request.get('comment')
+
+    sql_statement = (
+                    "UPDATE "
+                    "manualquarationDB.placement_details "
+                    "SET "
+                    "inventoryStatus=%s, reasonForRejection=%s, ageGroups=%s,"
+                    "gender=%s, ageFocus=%s, genderFocus=%s, category=%s, interest=%s,"
+                    "otherLanguages=%s, originCountry=%s, marketCountry=%s, comment=%s "
+                    "WHERE "
+                    "placementID=%s"
+                     )
+    cursor.execute(
+        sql_statement,
+        (inventory_status, reason_for_rejection, age_groups,
+         gender, age_focus, gender_focus, json.dumps(categories), json.dumps(interests),
+         json.dumps(languages), origin_country, json.dumps(markets), comments,
+         placement_id)
+    )
+
 # Method for bulk update in moderation queue
 def put_bulk_update(request_context):
         # obtain the widget status code to update
@@ -150,31 +208,31 @@ def put_bulk_update(request_context):
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
-            
+
             try:
                 if column_to_update == "status":
                     sql_update_query = """Update manualquarationDB.placement_details set status = %s where placementID = %s"""
                 elif column_to_update == 'priority':
                     sql_update_query = """Update manualquarationDB.placement_details set priority = %s where placementID = %s"""
                 elif column_to_update == 'moderator':
-                    sql_update_query = """Update manualquarationDB.placement_details set moderator = %s where placementID = %s"""    
-            
+                    sql_update_query = """Update manualquarationDB.placement_details set moderator = %s where placementID = %s"""
+
                 cursor.executemany(sql_update_query, records_to_update)
             except:
                 logger.error("Error while updating placement details in bulk")
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
-                mysql_conn.close            
+                mysql_conn.close
             records_updated = cursor.rowcount
 
         response = Response('{{"message":"Records updated successfully", ' \
                             ' "records_updated":"{}"}}'.format(records_updated),
-                            status=200, 
+                            status=200,
                             mimetype='application/json')
 
         return response
-# Method to delete entry from batch_discovery_view table 
+# Method to delete entry from batch_discovery_view table
 #That can be  extended further for batch delete
 def delete_placement(request_context):
         # obtain the bachName to delete
@@ -182,7 +240,6 @@ def delete_placement(request_context):
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
-            
             try:
                 cursor.execute("""DELETE FROM manualquarationDB.placement_details
                                WHERE placementID = %s """,(placementID))
@@ -195,7 +252,7 @@ def delete_placement(request_context):
                 mysql_conn.close
         response = Response('{{"message":"success", ' \
                             ' "placementID":"{}"}}'.format(placementID),
-                            status=200, 
+                            status=200,
                             mimetype='application/json')
 
         return response
@@ -207,7 +264,7 @@ def get_placements():
         # Remember to close SQL resources declared while running this function.
         # Keep any declared in global scope (e.g. mysql_conn) for later reuse.
         with __get_cursor() as cursor:
-        
+
             try:
                 cursor.execute("""select m.placementID as placementId,d.batchName as source,m.name as name, m.inventoryType as inventoryType,m.url as url,m.language as language,m.originCountry as origin,m.moderator as moderator,m.priority as priority,m.status as status from manualquarationDB.discovery_batch_details d join  manualquarationDB.placement_details m on d.batchID = m.batchID""")
                 results = cursor.fetchall()
@@ -216,8 +273,14 @@ def get_placements():
             finally:
                 logger.info("Closing cursor and mysql_con object")
                 cursor.close
-                mysql_conn.close        
+                mysql_conn.close
         return jsonify(results)
+
+def get_first_path_param(path):
+    if '?' in path:
+        path = path[:path.index('?')]
+    splitPath = path.split('/')
+    return splitPath[1]
 
 
 def placement_details(request):
@@ -226,7 +289,7 @@ def placement_details(request):
         # Initialize connections lazily, in case SQL access isn't needed for this
         # GCF instance. Doing so minimizes the number of active SQL connections,
         # which helps keep your GCF instances under SQL connection limits.
-        __get_mysql_conn() 
+        __get_mysql_conn()
 
         if request.method == 'OPTIONS':
             return __configure_cors(request)
@@ -236,39 +299,36 @@ def placement_details(request):
                 request,
                 lambda request: get_placements()
             )
-            #get_placements(request) 
-        # elif request.method == 'POST' :
-        #     logger.debug(" POST request: {}".format(repr(request)))
-        #     request_context = request.get_json()
-        #     response = post_batch_status(request_context) 
-
         elif request.method == 'PUT' :
             logger.debug(" PUT request: {}".format(repr(request)))
-            response = __configure_cors(
-                request,
-                lambda request: put_bulk_update(request.get_json())
-            )
-            # request_context = request.get_json()
-            # if 'bulkUpdate' in request_context:
-            #     response = put_bulk_update(request_context)
-            # else:
-            #     response = put_placement_update(request_context) 
+            relative_path = request.path
+            if relative_path == '/':
+                response = __configure_cors(
+                    request,
+                    lambda request: put_bulk_update(request.get_json())
+                )
+            else:
+                placement_id = get_first_path_param(relative_path)
+                response = __configure_cors(
+                    request,
+                    lambda request: put_update_placement_details(request.get_json(), placement_id)
+                )
         elif request.method == 'DELETE' :
             logger.debug(" DELETE request: {}".format(repr(request)))
             #request_context = request.get_json()
-            #response = delete_placement(request_context) 
+            #response = delete_placement(request_context)
             response = __configure_cors(
                 request,
-                lambda request: delete_placement(request.get_json()) 
+                lambda request: delete_placement(request.get_json())
             )
         else :
             raise NotImplementedError("Method {} not supported".format(request.method))
 
         return response
 
-    except :
+    except:
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        
+
         logger.error(repr(traceback.format_exception(exc_type, exc_value, exc_traceback)))
 
         # return error status
