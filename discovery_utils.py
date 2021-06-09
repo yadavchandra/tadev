@@ -83,11 +83,11 @@ def __get_mysql_conn():
             mysql_conn = pymysql.connect(**mysql_config)
 
 def __get_cursor():
-    """
+    '''
     Helper function to get a cursor
       PyMySQL does NOT automatically reconnect,
       so we must reconnect explicitly using ping()
-    """
+    '''
     try:
         return mysql_conn.cursor()
     except OperationalError:
@@ -160,15 +160,13 @@ def upload_batch_data(request_context):
                         sql = "insert into manualquarationDB.placement_details(%s) values(%s)"
                         res_sql = sql % (cols, val_cols)
                         cursor.execute (res_sql, mergedChannels)
-                        # cursor.execute(""" INSERT INTO manualquarationDB.placement_details(batchID,priority,name , id , url , inventoryType, language, originCountry)
-                        #                 VALUES(%s, %s, %s, %s, %s, %s, %s, %s) """,(batchID, priority, item['name'], item['id'], item['url'] , inventoryId , item['language'],originCountry))
                     # Insert data into dupes details table
                     util.insertInToBatchDupesDetails(batchID,cursor,duplicatePlacementIds,newPlacementIds)
                 except:
                     logger.error("Error while inserting records in placement details info")
                     logger.info("Deleting last inserted record in discovery batch")
                     cursor.execute(""" DELETE FROM manualquarationDB.discovery_batch_details WHERE batchID = %s """,(batchID))
-                    cursor.execute(""" DELETE FROM manualquarationDB.batch_dupes_details WHERE batchID = %s """,(batchID))
+                    #cursor.execute(""" DELETE FROM manualquarationDB.batch_dupes_details WHERE batchID = %s """,(batchID))
                     raise InvalidRequestException("DB error while inserting record to placement.",404)
             except:
                 logger.error("Error while inserting records in discovery batch")
